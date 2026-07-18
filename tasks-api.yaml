@@ -1,0 +1,860 @@
+openapi: "3.1.0"
+jsonSchemaDialect: "https://spec.openapis.org/oas/3.1/dialect/base"
+info:
+  title: Tasks API
+  version: 0.1.0
+  description: Egyszerű CRUD API Task erőforráshoz — gyakorló jegyzet.
+
+servers:
+  - url: https://api.pelda.hu/v1
+    description: Éles környezet
+  - url: https://staging-api.pelda.hu/v1
+    description: Staging környezet
+  - url: http://localhost:3000/v1
+    description: Helyi fejlesztés
+
+security:
+  - BearerAuth: []
+  - OAuth2:
+      - read:tasks
+      - write:tasks
+
+paths:
+  /api/auth-jwt:
+    post:
+      summary: Bejelentkezés e-mail + jelszóval, JWT access tokenért
+      deprecated: true
+      description: >-
+        Elavult (deprecated): ez a végpont közvetlenül fogadja a jelszót a klienstől.
+        Helyette az OAuth2 authorization code folyamatot használd (`GET /api/auth-oauth`
+        → `POST /api/auth-oauth/token`), ahol a jelszó sosem kerül a kliens alkalmazás
+        kezébe. Ez a végpont 2026-12-31 után megszűnik (sunset).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "nagyjozsef@pelda.hu"
+                password:
+                  type: string
+                  format: password
+                  example: "titkosjelszo123"
+              required:
+                - email
+                - password
+      responses:
+        '200':
+          description: Sikeres bejelentkezés, JWT access token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    example: "eyJhbGciOiJSUzI1NiIsInR5cCI6..."
+                  token_type:
+                    type: string
+                    example: "Bearer"
+                  expires_in:
+                    type: integer
+                    example: 3600
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth-oauth:
+    get:
+      summary: OAuth2 authorization code folyamat indítása (átirányítás a bejelentkezéshez)
+      security: []
+      parameters:
+        - name: response_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [code]
+          example: code
+        - name: client_id
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "abc123"
+        - name: redirect_uri
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+          example: "https://app.pelda.hu/callback"
+        - name: scope
+          in: query
+          required: false
+          schema:
+            type: string
+          example: "read:tasks write:tasks"
+        - name: state
+          in: query
+          required: true
+          description: CSRF védelem — a kliens generálja, majd visszatéréskor ellenőrzi
+          schema:
+            type: string
+          example: "xyz789"
+      responses:
+        '302':
+          description: Átirányítás a bejelentkezési oldalra, majd sikeres jóváhagyás után vissza a redirect_uri-ra egy code paraméterrel
+
+  /api/auth-oauth/token:
+    post:
+      summary: Authorization code beváltása tokenre, vagy meglévő token frissítése
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/OAuthAuthorizationCodeGrant'
+                - $ref: '#/components/schemas/OAuthRefreshTokenGrant'
+              discriminator:
+                propertyName: grant_type
+                mapping:
+                  authorization_code: '#/components/schemas/OAuthAuthorizationCodeGrant'
+                  refresh_token: '#/components/schemas/OAuthRefreshTokenGrant'
+      responses:
+        '200':
+          description: Sikeres token csere/frissítés
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OAuthTokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/auth-oauth/revoke:
+    post:
+      summary: Access vagy refresh token visszavonása
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                token:
+                  type: string
+                  description: A visszavonandó access vagy refresh token
+                  example: "def456..."
+                token_type_hint:
+                  type: string
+                  enum: [access_token, refresh_token]
+                  example: refresh_token
+                client_id:
+                  type: string
+                  example: "abc123"
+                client_secret:
+                  type: string
+                  example: "titok"
+              required:
+                - token
+                - client_id
+                - client_secret
+      responses:
+        '200':
+          description: A token visszavonva (akkor is 200, ha a token már eleve érvénytelen volt)
+
+  /tasks:
+    get:
+      summary: Task-ok listázása
+      security: []
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          example: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+        - name: done
+          in: query
+          required: false
+          description: Csak a kész (true) vagy még nyitott (false) task-ok szűrése
+          schema:
+            type: boolean
+          example: false
+        - name: sort
+          in: query
+          required: false
+          description: Rendezési mező
+          schema:
+            type: string
+            enum:
+              - createdAt
+              - title
+            default: createdAt
+          example: createdAt
+        - name: order
+          in: query
+          required: false
+          description: Rendezési irány
+          schema:
+            type: string
+            enum:
+              - asc
+              - desc
+            default: desc
+          example: desc
+      responses:
+        '200':
+          description: >-
+            Task lista. Alapértelmezetten a v1 alak (application/json), de
+            'Accept: application/vnd.tasks-api.v2+json' fejléccel ugyanez a
+            végpont a v2 alakot adja vissza ('status' mezővel a 'done'
+            helyett) — ez a tartalom-egyeztetésen (content negotiation)
+            alapuló, útvonal nélküli verziózás demója.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Task'
+                  total:
+                    type: integer
+                    example: 42
+                  page:
+                    type: integer
+                    example: 1
+                  limit:
+                    type: integer
+                    example: 20
+            application/vnd.tasks-api.v2+json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TaskV2'
+                  total:
+                    type: integer
+                    example: 42
+                  page:
+                    type: integer
+                    example: 1
+                  limit:
+                    type: integer
+                    example: 20
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      summary: Új task létrehozása
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskInput'
+      responses:
+        '201':
+          description: Létrehozva
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /tasks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: Egy task lekérése
+      responses:
+        '200':
+          description: Task adatai
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      summary: Task frissítése
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskInput'
+      responses:
+        '200':
+          description: Frissítve
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: Task törlése
+      responses:
+        '204':
+          description: Törölve, nincs tartalom
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # Path-alapú verziózás demója: a v1 '/tasks' mellett egy különálló
+  # '/v2/tasks' útvonal, mert a 'done' -> 'status' mezőváltás BREAKING
+  # CHANGE — nem lehetne visszafelé kompatibilisen bevezetni ugyanazon
+  # az útvonalon és tartalomtípuson.
+  /v2/tasks:
+    get:
+      summary: Task-ok listázása (v2 — 'status' mezővel a 'done' helyett)
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          example: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+        - name: status
+          in: query
+          required: false
+          description: Csak az adott állapotú task-ok szűrése
+          schema:
+            type: string
+            enum:
+              - todo
+              - in_progress
+              - done
+          example: in_progress
+      responses:
+        '200':
+          description: Task lista (v2 alak)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TaskV2'
+                  total:
+                    type: integer
+                    example: 42
+                  page:
+                    type: integer
+                    example: 1
+                  limit:
+                    type: integer
+                    example: 20
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      summary: Új task létrehozása (v2)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskV2Input'
+      responses:
+        '201':
+          description: Létrehozva
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskV2'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      summary: Egy felhasználó lekérése
+      responses:
+        '200':
+          description: Felhasználó adatai
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+webhooks:
+  taskCompleted:
+    post:
+      summary: Kiváltva, amikor egy task 'done' mezője true-ra vált
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreatedEvent'
+      responses:
+        '200':
+          description: A kliens visszaigazolta a webhook feldolgozását
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+    OAuth2:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.pelda.hu/oauth/authorize
+          tokenUrl: https://auth.pelda.hu/oauth/token
+          scopes:
+            read:tasks: Task-ok olvasása
+            write:tasks: Task-ok létrehozása, módosítása, törlése
+
+  schemas:
+    OAuthAuthorizationCodeGrant:
+      type: object
+      additionalProperties: false
+      properties:
+        grant_type:
+          type: string
+          enum: [authorization_code]
+        code:
+          type: string
+          description: Az /api/auth-oauth végpontról visszakapott, egyszer használatos code
+          example: "AUTH_CODE_ITT"
+        redirect_uri:
+          type: string
+          format: uri
+          example: "https://app.pelda.hu/callback"
+        client_id:
+          type: string
+          example: "abc123"
+        client_secret:
+          type: string
+          example: "titok"
+      required:
+        - grant_type
+        - code
+        - redirect_uri
+        - client_id
+        - client_secret
+
+    OAuthRefreshTokenGrant:
+      type: object
+      additionalProperties: false
+      properties:
+        grant_type:
+          type: string
+          enum: [refresh_token]
+        refresh_token:
+          type: string
+          example: "def456..."
+        client_id:
+          type: string
+          example: "abc123"
+        client_secret:
+          type: string
+          example: "titok"
+      required:
+        - grant_type
+        - refresh_token
+        - client_id
+        - client_secret
+
+    OAuthTokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          example: "eyJhbGciOiJSUzI1NiIsInR5cCI6..."
+        token_type:
+          type: string
+          example: "Bearer"
+        expires_in:
+          type: integer
+          example: 3600
+        refresh_token:
+          type: string
+          example: "def456..."
+        scope:
+          type: string
+          example: "read:tasks write:tasks"
+      required:
+        - access_token
+        - token_type
+        - expires_in
+
+    BaseEntity:
+      type: object
+      properties:
+        id:
+          type: string
+          readOnly: true
+          example: "a1b2c3"
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          example: "2026-07-17T09:30:00Z"
+      required:
+        - id
+        - createdAt
+
+    Task:
+      allOf:
+        - $ref: '#/components/schemas/BaseEntity'
+        - type: object
+          additionalProperties: false
+          properties:
+            id:
+              type: string
+              readOnly: true
+              example: "a1b2c3"
+            createdAt:
+              type: string
+              format: date-time
+              readOnly: true
+              example: "2026-07-17T09:30:00Z"
+            title:
+              type: string
+              example: "Bevásárlás"
+            description:
+              type:
+                - string
+                - "null"
+              example: "Tej, kenyér, tojás"
+            done:
+              type: boolean
+              deprecated: true
+              description: >-
+                Elavult (deprecated): a v2 API ('/v2/tasks', illetve az
+                'application/vnd.tasks-api.v2+json' válaszalak) helyette a
+                'status' mezőt használja (todo/in_progress/done), ami több
+                állapotot tud kifejezni egy sima boolean-nél.
+              example: false
+            assignedTo:
+              $ref: '#/components/schemas/User'
+            priority:
+              type: string
+              enum:
+                - low
+                - medium
+                - high
+              default: medium
+              example: high
+            tags:
+              type: array
+              items:
+                type: string
+                pattern: '^[a-z0-9-]+$'
+              example: ["otthon", "surgos"]
+            internalNote:
+              type: string
+              writeOnly: true
+              description: Csak írható belső megjegyzés, a válaszban sosem jelenik meg
+              example: "Ügyfél kérte sürgősnek"
+          required:
+            - id
+            - title
+            - done
+            - createdAt
+
+    TaskInput:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          example: "Bevásárlás"
+        description:
+          type:
+            - string
+            - "null"
+          example: "Tej, kenyér, tojás"
+        done:
+          type: boolean
+          deprecated: true
+          description: "Elavult (deprecated): lásd a Task séma 'done' mezőjének magyarázatát."
+          example: false
+        assignedToId:
+          type: string
+          description: A felelős felhasználó azonosítója
+          example: "u-42"
+        priority:
+          type: string
+          enum:
+            - low
+            - medium
+            - high
+          default: medium
+          example: high
+        tags:
+          type: array
+          items:
+            type: string
+            pattern: '^[a-z0-9-]+$'
+          example: ["otthon", "surgos"]
+        internalNote:
+          type: string
+          writeOnly: true
+          description: Csak írható belső megjegyzés, a válaszban sosem jelenik meg
+          example: "Ügyfél kérte sürgősnek"
+      required:
+        - title
+
+    # Breaking change demó: a v2 Task/TaskInput ugyanazt a BaseEntity-t
+    # örökli, de a boolean 'done' helyett egy háromállapotú 'status' enumot
+    # használ — ez azért breaking change, mert egy régi kliens, aki
+    # 'done: true'-t vár, nem tudja értelmezni a 'status: "in_progress"'-t.
+    TaskV2:
+      allOf:
+        - $ref: '#/components/schemas/BaseEntity'
+        - type: object
+          additionalProperties: false
+          properties:
+            id:
+              type: string
+              readOnly: true
+              example: "a1b2c3"
+            createdAt:
+              type: string
+              format: date-time
+              readOnly: true
+              example: "2026-07-17T09:30:00Z"
+            title:
+              type: string
+              example: "Bevásárlás"
+            description:
+              type:
+                - string
+                - "null"
+              example: "Tej, kenyér, tojás"
+            status:
+              type: string
+              enum:
+                - todo
+                - in_progress
+                - done
+              default: todo
+              example: in_progress
+            assignedTo:
+              $ref: '#/components/schemas/User'
+            priority:
+              type: string
+              enum:
+                - low
+                - medium
+                - high
+              default: medium
+              example: high
+            tags:
+              type: array
+              items:
+                type: string
+                pattern: '^[a-z0-9-]+$'
+              example: ["otthon", "surgos"]
+          required:
+            - id
+            - title
+            - status
+            - createdAt
+
+    TaskV2Input:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          example: "Bevásárlás"
+        description:
+          type:
+            - string
+            - "null"
+          example: "Tej, kenyér, tojás"
+        status:
+          type: string
+          enum:
+            - todo
+            - in_progress
+            - done
+          default: todo
+          example: in_progress
+        assignedToId:
+          type: string
+          description: A felelős felhasználó azonosítója
+          example: "u-42"
+        priority:
+          type: string
+          enum:
+            - low
+            - medium
+            - high
+          default: medium
+          example: high
+        tags:
+          type: array
+          items:
+            type: string
+            pattern: '^[a-z0-9-]+$'
+          example: ["otthon", "surgos"]
+      required:
+        - title
+
+    User:
+      allOf:
+        - $ref: '#/components/schemas/BaseEntity'
+        - type: object
+          additionalProperties: false
+          properties:
+            id:
+              type: string
+              readOnly: true
+              example: "u-42"
+            createdAt:
+              type: string
+              format: date-time
+              readOnly: true
+              example: "2026-07-17T09:30:00Z"
+            name:
+              type: string
+              example: "Nagy József"
+            email:
+              type: string
+              format: email
+              example: "nagyjozsef@pelda.hu"
+          required:
+            - id
+            - name
+            - createdAt
+
+    # Bemutató: oneOf — egy TaskEvent vagy TaskCreatedEvent, vagy TaskDeletedEvent
+    # alakú lehet, a "type" mező dönti el melyik (discriminator).
+    TaskEvent:
+      oneOf:
+        - $ref: '#/components/schemas/TaskCreatedEvent'
+        - $ref: '#/components/schemas/TaskDeletedEvent'
+      discriminator:
+        propertyName: type
+        mapping:
+          created: '#/components/schemas/TaskCreatedEvent'
+          deleted: '#/components/schemas/TaskDeletedEvent'
+
+    TaskCreatedEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [created]
+        task:
+          $ref: '#/components/schemas/Task'
+      required:
+        - type
+        - task
+
+    TaskDeletedEvent:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [deleted]
+        taskId:
+          type: string
+          example: "a1b2c3"
+      required:
+        - type
+        - taskId
+
+  responses:
+    BadRequest:
+      description: Érvénytelen kérés
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+    Unauthorized:
+      description: Hiányzó vagy érvénytelen token
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+    NotFound:
+      description: Nem található erőforrás
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
