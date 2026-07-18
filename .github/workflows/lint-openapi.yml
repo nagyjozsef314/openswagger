@@ -1,0 +1,27 @@
+name: Lint OpenAPI spec
+
+on:
+  push:
+    paths:
+      - 'tasks-api.yaml'
+  pull_request:
+    paths:
+      - 'tasks-api.yaml'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Redocly CLI
+        run: npm install -g @redocly/cli
+
+      - name: Lint tasks-api.yaml
+        run: redocly lint tasks-api.yaml
