@@ -19,9 +19,23 @@ security:
       - read:tasks
       - write:tasks
 
+tags:
+  - name: Auth
+    description: Bejelentkezés és OAuth2 token-kezelés
+  - name: Tasks
+    description: Task erőforrás (v1)
+  - name: Tasks v2
+    description: Task erőforrás (v2 — 'status' mezővel a 'done' helyett)
+  - name: Users
+    description: Felhasználó erőforrás
+  - name: Webhooks
+    description: Szerver→kliens irányú push események
+
 paths:
   /api/auth-jwt:
     post:
+      operationId: loginWithPassword
+      tags: [Auth]
       summary: Bejelentkezés e-mail + jelszóval, JWT access tokenért
       deprecated: true
       description: >-
@@ -71,6 +85,8 @@ paths:
 
   /api/auth-oauth:
     get:
+      operationId: startOAuthAuthorization
+      tags: [Auth]
       summary: OAuth2 authorization code folyamat indítása (átirányítás a bejelentkezéshez)
       security: []
       parameters:
@@ -113,6 +129,8 @@ paths:
 
   /api/auth-oauth/token:
     post:
+      operationId: exchangeOAuthToken
+      tags: [Auth]
       summary: Authorization code beváltása tokenre, vagy meglévő token frissítése
       security: []
       requestBody:
@@ -140,6 +158,8 @@ paths:
 
   /api/auth-oauth/revoke:
     post:
+      operationId: revokeOAuthToken
+      tags: [Auth]
       summary: Access vagy refresh token visszavonása
       security: []
       requestBody:
@@ -174,6 +194,8 @@ paths:
 
   /tasks:
     get:
+      operationId: listTasks
+      tags: [Tasks]
       summary: Task-ok listázása
       security: []
       parameters:
@@ -270,6 +292,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
 
     post:
+      operationId: createTask
+      tags: [Tasks]
       summary: Új task létrehozása
       requestBody:
         required: true
@@ -298,6 +322,8 @@ paths:
           type: string
 
     get:
+      operationId: getTask
+      tags: [Tasks]
       summary: Egy task lekérése
       responses:
         '200':
@@ -312,6 +338,8 @@ paths:
           $ref: '#/components/responses/NotFound'
 
     put:
+      operationId: updateTask
+      tags: [Tasks]
       summary: Task frissítése
       requestBody:
         required: true
@@ -334,6 +362,8 @@ paths:
           $ref: '#/components/responses/NotFound'
 
     delete:
+      operationId: deleteTask
+      tags: [Tasks]
       summary: Task törlése
       responses:
         '204':
@@ -349,6 +379,8 @@ paths:
   # az útvonalon és tartalomtípuson.
   /v2/tasks:
     get:
+      operationId: listTasksV2
+      tags: [Tasks v2]
       summary: Task-ok listázása (v2 — 'status' mezővel a 'done' helyett)
       parameters:
         - name: page
@@ -404,6 +436,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
 
     post:
+      operationId: createTaskV2
+      tags: [Tasks v2]
       summary: Új task létrehozása (v2)
       requestBody:
         required: true
@@ -432,6 +466,8 @@ paths:
           type: string
 
     get:
+      operationId: getUser
+      tags: [Users]
       summary: Egy felhasználó lekérése
       responses:
         '200':
@@ -448,6 +484,8 @@ paths:
 webhooks:
   taskCompleted:
     post:
+      operationId: taskCompletedWebhook
+      tags: [Webhooks]
       summary: Kiváltva, amikor egy task 'done' mezője true-ra vált
       requestBody:
         required: true
