@@ -4,9 +4,12 @@ on:
   push:
     paths:
       - 'tasks-api.yaml'
+      - '.github/workflows/lint-openapi.yml'
   pull_request:
     paths:
       - 'tasks-api.yaml'
+      - '.github/workflows/lint-openapi.yml'
+  workflow_dispatch: {}
 
 jobs:
   lint:
